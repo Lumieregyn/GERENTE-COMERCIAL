@@ -6,3 +6,9 @@ function isBusinessHour(date = new Date()) {
 }
 
 module.exports = { isBusinessHour };
+module.exports.estáNoHorárioComercial = function estáNoHorárioComercial() {
+  const now = new Date();
+  const day = now.getDay(); // 0=dom,6=sáb
+  const hour = now.getHours();
+  return day >= 1 && day <= 5 && hour >= 8 && hour < 19;
+};
