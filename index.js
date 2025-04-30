@@ -1,85 +1,65 @@
 require('dotenv').config();
 const express = require('express');
-const { create, Whatsapp } = require('@wppconnect-team/wppconnect');
+const { create } = require('@wppconnect-team/wppconnect');
 const QRCode = require('qrcode');
 const axios = require('axios');
 const schedule = require('node-schedule');
-// importe aqui seus utils: analyzeGPT, timeUtils, etc.
+const { analyzeMessage } = require('./utils/analyzeGPT');
+const { isBusinessHour } = require('./utils/timeUtils');
 
 const app = express();
 app.use(express.json());
 
-let client;               // instância WPPConnect
-let qrImage;              // QR em Base64
-const WEBHOOK_URL = process.env.SURI_WEBHOOK_URL;
-const GRUPO_GESTORES = process.env.GRUPO_GESTORES_ID;
+let client, latestQr;
+const { SURI_WEBHOOK_URL, GRUPO_GESTORES_ID, PORT } = process.env;
 const VENDEDORES = {
-  "Cindy": "5562994671766",
-  "Ana Clara": "556291899053",
-  "Emily": "556281704171"
-  // ...
+  Cindy: '5562994671766',
+  'Ana Clara': '556291899053',
+  Emily: '556281704171'
 };
 
-// 1) Inicializa WPPConnect
 create({
   session: 'lumieregyn',
   puppeteerOptions: {
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: ['--no-sandbox','--disable-setuid-sandbox']
   }
 })
-  .then(async (clientInstance) => {
-    client = clientInstance;
-
-    client.onStateChange((state) => {
-      console.log('Estado WPP:', state);
-      // se perder conexão, trate reconexão
-    });
-
-    // captura QR e converte em Base64
-    client.onQRCode(async (base64Qr) => {
-      qrImage = base64Qr;
-    });
-
-    // quando pronto
-    client.onReady(() => {
-      console.log('✅ WhatsApp conectado');
-    });
-
-    // roteador de mensagens
-    client.onMessage(async (msg) => {
-      // envie o payload para SURI
-      await axios.post(WEBHOOK_URL, msg);
-      // aplique sua lógica de IA, checklist, alertas, etc.
+  .then(c => {
+    client = c;
+    client.onQRCode(qr => { latestQr = qr; });
+    client.onReady(() => console.log('✅ WhatsApp pronto'));
+    client.onMessage(async msg => {
+      await axios.post(SURI_WEBHOOK_URL, msg).catch(console.error);
+      const alert = await analyzeMessage(msg);
+      if (alert && isBusinessHour()) {
+        const to = VENDEDORES[msg.senderName] || null;
+        if (alert.level === 'grave') {
+          await client.sendText(GRUPO_GESTORES_ID, alert.text);
+        } else if (to) {
+          await client.sendText(to, alert.text);
+        }
+      }
     });
   })
-  .catch(err => console.error('Erro ao iniciar WPP:', err));
+  .catch(console.error);
 
-// 2) Rota para servir o QR dinâmico
-app.get('/qr', async (req, res) => {
-  if (!qrImage) {
-    return res.status(503).send('QR ainda não disponível');
-  }
-  const img = Buffer.from(qrImage.split(',')[1], 'base64');
-  res.setHeader('Content-Type', 'image/png');
+app.get('/qr', (req, res) => {
+  if (!latestQr) return res.status(503).send('QR não disponível');
+  const img = Buffer.from(latestQr.split(',')[1], 'base64');
+  res.setHeader('Content-Type','image/png');
   res.send(img);
 });
 
-// 3) Rota webhook (SURI → aqui chega payload de conversa)
-app.post('/conversa', async (req, res) => {
-  const payload = req.body;
-  console.log('Payload recebido:', payload);
-  // aqui dispare sua análise e alertas
+app.post('/conversa', (req, res) => {
+  console.log('📬 Payload SURI:', req.body);
   res.sendStatus(200);
 });
 
-// 4) Exemplo de agendamento de alerta
-// dispara às 14:00 todo dia útil:
-schedule.scheduleJob(
-  { hour: 14, minute: 0, dayOfWeek: new schedule.Range(1,5) },
-  () => {
-    // verifique orçamentos pendentes e envie alerta
-  }
-);
+schedule.scheduleJob({ hour: 8, minute: 0, dayOfWeek: new schedule.Range(1,5) }, () => {
+  console.log('🔔 Job diário de lembrete rodando…');
+});
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+const serverPort = PORT || 3000;
+app.listen(serverPort, () =>
+  console.log(`🚀 Servidor rodando na porta ${serverPort}`)
+);
