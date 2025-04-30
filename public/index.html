@@ -1,20 +1,17 @@
 <!DOCTYPE html>
-<html>
+<html lang="pt-BR">
 <head>
-  <meta charset="utf-8">
-  <title>Gerente Comercial QR Code</title>
+  <meta charset="UTF-8">
+  <title>Gerente Comercial IA - QR Code</title>
 </head>
 <body>
-  <h1>Gerente Comercial QR Code</h1>
-  <img id="qr" alt="QR Code"/>
+  <h1>Escaneie o QR com o WhatsApp</h1>
+  <img id="qr" src="/qr" alt="QR Code" />
   <script>
-    async function fetchQR(){
-      const res = await fetch('/qr');
-      const html = await res.text();
-      document.getElementById('qr').outerHTML = html;
-    }
-    setInterval(fetchQR, 5000);
-    fetchQR();
+    // atualiza a cada 30s
+    setInterval(() => {
+      document.getElementById('qr').src = '/qr?'+Date.now();
+    }, 30000);
   </script>
 </body>
 </html>
