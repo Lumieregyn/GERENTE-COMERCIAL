@@ -38,7 +38,7 @@ app.get('/', (req, res) => {
   if (!qrCodeDataUrl) {
     return res.send('Aguardando QR Code...');
   }
-  res.send(\`
+  res.send(\
     <html>
       <body>
         <img src="\${qrCodeDataUrl}" alt="QR Code"/>
