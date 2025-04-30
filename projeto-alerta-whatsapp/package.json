@@ -1,0 +1,15 @@
+{
+  "name": "projeto-alerta-whatsapp",
+  "version": "1.0.0",
+  "description": "Sistema de alerta automático via WhatsApp usando WppConnect e GPT-4o",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "^16.0.3",
+    "axios": "^1.3.5",
+    "wppconnect": "^1.0.0"
+  }
+}
