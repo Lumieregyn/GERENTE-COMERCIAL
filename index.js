@@ -1,53 +1,71 @@
 require('dotenv').config();
 const express = require('express');
 const { create } = require('@wppconnect-team/wppconnect');
-const { analyzeMensagem } = require('./utils/analyzeGPT');
-const { isBusinessHour } = require('./utils/timeUtils');
+const QRCode = require('qrcode');
+const path = require('path');
+const { analisarMensagem } = require('./utils/analyzeGPT');
+const { estáNoHorárioComercial } = require('./utils/timeUtils');
 
 const app = express();
-app.use(express.json());
+const PORT = process.env.PORT || 8080;
 
-let clientInstance;
-let qrBase64 = '';
+let base64Qr = '';
 
-async function init() {
-  try {
-    create({
-      session: process.env.WPP_SESSION_NAME || 'lumieregyn',
-      puppeteerOptions: {
-        headless: true,
-        args: ['--no-sandbox','--disable-setuid-sandbox']
-      },
-      catchQR: (qr) => {
-        qrBase64 = qr;
-        console.log('QR Code captured');
-      },
-      logQR: false,
-    }).then(client => {
-      clientInstance = client;
-      console.log('WhatsApp connected');
-      client.onMessage(async msg => {
-        console.log('Message received', JSON.stringify(msg));
-        // TODO: integrate analyzeMensagem, alerts, etc.
-      });
-    });
-  } catch(err) {
-    console.error('Error init WPP', err);
+// 1) Monta cliente WPPConnect, captura o QR Code como string
+create({
+  session: 'lumieregyn',
+  puppeteerOptions: {
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu',
+    ],
   }
-}
+})
+  .then(client => {
+    client.on('qr', async qr => {
+      // converte o ASCII QR para imagem PNG em base64
+      base64Qr = await QRCode.toDataURL(qr);
+      console.log('🔍 QR gerado');
+    });
 
-init();
+    client.on('message', async msg => {
+      // aqui dispara a lógica de checklist, IA, alertas, etc.
+      await analisarMensagem(msg);
+    });
 
+    console.log(`✅ WhatsApp client inicializado`);
+  })
+  .catch(err => console.error('Erro ao iniciar o cliente WPP:', err));
+
+// 2) Serve estáticos (caso tenha frontend)
+app.use('/public', express.static(path.join(__dirname, 'public')));
+
+// 3) Rota que retorna o QR Code
 app.get('/qr', (req, res) => {
-  res.send(`<img src="data:image/png;base64,${qrBase64}" />`);
+  if (!base64Qr) {
+    return res.status(503).send('QR não está pronto, aguarde...');
+  }
+  // devolve o PNG decodificado
+  const img = Buffer.from(base64Qr.split(',')[1], 'base64');
+  res.writeHead(200, {
+    'Content-Type': 'image/png',
+    'Content-Length': img.length
+  });
+  res.end(img);
 });
 
-app.post('/conversa', async (req, res) => {
-  const { payload } = req.body;
-  console.log('Payload received:', JSON.stringify(payload));
-  // TODO: call analyzeMensagem(payload), check business hours, send alerts.
+// 4) Rota de webhook para receber os logs da SURI
+app.post('/conversa', express.json(), async (req, res) => {
+  const payload = req.body;
+  // dispara a análise de mensagens, imagens, PDFs e áudios
+  await analisarMensagem(payload);
   res.sendStatus(200);
 });
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+});
