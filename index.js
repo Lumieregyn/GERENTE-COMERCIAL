@@ -1,65 +1,77 @@
+// index.js
 require('dotenv').config();
 const express = require('express');
-const { create } = require('@wppconnect-team/wppconnect');
-const QRCode = require('qrcode');
-const axios = require('axios');
-const schedule = require('node-schedule');
-const { analyzeMessage } = require('./utils/analyzeGPT');
-const { isBusinessHour } = require('./utils/timeUtils');
+const wppconnect = require('@wppconnect-team/wppconnect');
+const qrcode = require('qrcode');
 
 const app = express();
 app.use(express.json());
 
-let client, latestQr;
-const { SURI_WEBHOOK_URL, GRUPO_GESTORES_ID, PORT } = process.env;
-const VENDEDORES = {
-  Cindy: '5562994671766',
-  'Ana Clara': '556291899053',
-  Emily: '556281704171'
-};
+const PORT = process.env.PORT || 10000;
+let client = null;
 
-create({
-  session: 'lumieregyn',
-  puppeteerOptions: {
-    args: ['--no-sandbox','--disable-setuid-sandbox']
-  }
-})
-  .then(c => {
-    client = c;
-    client.onQRCode(qr => { latestQr = qr; });
-    client.onReady(() => console.log('✅ WhatsApp pronto'));
-    client.onMessage(async msg => {
-      await axios.post(SURI_WEBHOOK_URL, msg).catch(console.error);
-      const alert = await analyzeMessage(msg);
-      if (alert && isBusinessHour()) {
-        const to = VENDEDORES[msg.senderName] || null;
-        if (alert.level === 'grave') {
-          await client.sendText(GRUPO_GESTORES_ID, alert.text);
-        } else if (to) {
-          await client.sendText(to, alert.text);
-        }
-      }
+/**
+ * Inicializa o cliente WhatsApp via WPPConnect
+ * com fallback de versão para não dar erro "Version not available".
+ */
+async function initWhatsApp() {
+  try {
+    client = await wppconnect.create({
+      session: 'GerenteComercialIA',          // nome da sessão
+      catchQR: (base64Qrimg, asciiQR, attempts, urlCode) => {
+        console.log('⏳ QRCode gerado (base64):', base64Qrimg.slice(0,50) + '...');
+      },
+      statusFind: (statusSession, session) => {
+        console.log(`🔄 Status de sessão (${session}):`, statusSession);
+      },
+      headless: true,
+      logQR: false,
+      puppeteerOptions: {
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      },
+      browserArgs: ['--no-sandbox', '--disable-setuid-sandbox'],
+      useChrome: false,
+      version: '2.2407.3'                     // <== fallback estável
     });
-  })
-  .catch(console.error);
+    console.log('✅ Cliente WPPConnect iniciado com sucesso');
+  } catch (err) {
+    console.error('❌ Falha ao iniciar o cliente WPPConnect:', err);
+  }
+}
 
-app.get('/qr', (req, res) => {
-  if (!latestQr) return res.status(503).send('QR não disponível');
-  const img = Buffer.from(latestQr.split(',')[1], 'base64');
-  res.setHeader('Content-Type','image/png');
-  res.send(img);
+// Rota para exibir QR code em uma página HTML simples
+app.get('/qr', async (req, res) => {
+  if (!client) {
+    return res.status(503).send('Cliente WhatsApp ainda não iniciado.');
+  }
+  try {
+    const qrCode = await client.getQrCode();
+    const img = await qrcode.toDataURL(qrCode);
+    res.send(`
+      <html><body style="display:flex;align-items:center;justify-content:center;padding:50px">
+        <img src="${img}" alt="QR Code WhatsApp" />
+      </body></html>
+    `);
+  } catch (err) {
+    console.error('Erro ao gerar QR code:', err);
+    res.status(500).send('Erro ao gerar QR code');
+  }
 });
 
-app.post('/conversa', (req, res) => {
-  console.log('📬 Payload SURI:', req.body);
+// Webhook que a Suri envia para /conversa com o payload completo
+app.post('/conversa', async (req, res) => {
+  const payload = req.body;
+  console.log('📥 Payload recebido em /conversa:', JSON.stringify(payload, null, 2));
+
+  // TODO: aqui entra sua lógica de IA (checklists, alertas, etc.)
+  // ex. analisar payload.mensagem.text ou payload.mensagem.anexos
+  // e disparar alertas via client.sendText(...)
+  
   res.sendStatus(200);
 });
 
-schedule.scheduleJob({ hour: 8, minute: 0, dayOfWeek: new schedule.Range(1,5) }, () => {
-  console.log('🔔 Job diário de lembrete rodando…');
+// Inicia o servidor e o WhatsApp
+app.listen(PORT, async () => {
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+  await initWhatsApp();
 });
-
-const serverPort = PORT || 3000;
-app.listen(serverPort, () =>
-  console.log(`🚀 Servidor rodando na porta ${serverPort}`)
-);
