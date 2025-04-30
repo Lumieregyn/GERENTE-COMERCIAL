@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 8080;
 
 let base64Qr = '';
 
-// 1) Monta cliente WPPConnect, captura o QR Code como string
+// 1) Inicia o cliente WPPConnect e captura o QR
 create({
   session: 'lumieregyn',
   puppeteerOptions: {
@@ -21,35 +21,33 @@ create({
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-accelerated-2d-canvas',
-      '--disable-gpu',
-    ],
+      '--disable-gpu'
+    ]
   }
 })
   .then(client => {
+    console.log('✅ WhatsApp client inicializado');
+
     client.on('qr', async qr => {
-      // converte o ASCII QR para imagem PNG em base64
       base64Qr = await QRCode.toDataURL(qr);
       console.log('🔍 QR gerado');
     });
 
-    client.on('message', async msg => {
-      // aqui dispara a lógica de checklist, IA, alertas, etc.
-      await analisarMensagem(msg);
+    client.on('message', msg => {
+      // toda a lógica de IA, checklist e alertas
+      analisarMensagem(msg).catch(console.error);
     });
-
-    console.log(`✅ WhatsApp client inicializado`);
   })
   .catch(err => console.error('Erro ao iniciar o cliente WPP:', err));
 
-// 2) Serve estáticos (caso tenha frontend)
+// 2) Serve o frontend (se existir)
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
-// 3) Rota que retorna o QR Code
+// 3) Rota para pegar o QR Code
 app.get('/qr', (req, res) => {
   if (!base64Qr) {
-    return res.status(503).send('QR não está pronto, aguarde...');
+    return res.status(503).send('QR ainda não pronto, aguarde...');
   }
-  // devolve o PNG decodificado
   const img = Buffer.from(base64Qr.split(',')[1], 'base64');
   res.writeHead(200, {
     'Content-Type': 'image/png',
@@ -58,12 +56,15 @@ app.get('/qr', (req, res) => {
   res.end(img);
 });
 
-// 4) Rota de webhook para receber os logs da SURI
+// 4) Webhook para receber logs da SURI
 app.post('/conversa', express.json(), async (req, res) => {
-  const payload = req.body;
-  // dispara a análise de mensagens, imagens, PDFs e áudios
-  await analisarMensagem(payload);
-  res.sendStatus(200);
+  try {
+    await analisarMensagem(req.body);
+    res.sendStatus(200);
+  } catch (e) {
+    console.error(e);
+    res.sendStatus(500);
+  }
 });
 
 app.listen(PORT, () => {
