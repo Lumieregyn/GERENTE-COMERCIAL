@@ -1,138 +1,184 @@
+// index.js
 require('dotenv').config();
-const express = require('express');
-const bodyParser = require('body-parser');
-const QRCode = require('qrcode');
-const { create } = require('@wppconnect-team/wppconnect');
-const axios = require('axios');
-const moment = require('moment-business-time');
+const express       = require('express');
+const bodyParser    = require('body-parser');
+const qrcode        = require('qrcode');
+const wppconnect    = require('@wppconnect-team/wppconnect');
+const { Configuration, OpenAIApi } = require('openai');
 
-const app = express();
-app.use(bodyParser.json());
-const PORT = process.env.PORT || 8080;
-const MGMT_GROUP = process.env.MGMT_GROUP_ID; // ex: '55XXXXX-YYYY@g.us'
+const app       = express();
+const PORT      = process.env.PORT || 8080;
+const SURI_HOOK = process.env.SURI_WEBHOOK_URL;        // ex: https://webhook-suri-agent.onrender.com/conversa
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
+const GROUP_ID   = process.env.WHATSAPP_GROUP_ID;      // ID do grupo “Gerente Comercial IA”
 
-const VENDORS = {
-  'Cindy Loren':    '5562994671766',
-  'Ana Clara Martins':'5562991899053',
-  'Emily':          '5562981704171'
-};
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 
-moment.updateLocale('en', {
-  workinghours: {
-    0: null,
-    1: ['08:00:00','19:00:00'],
-    2: ['08:00:00','19:00:00'],
-    3: ['08:00:00','19:00:00'],
-    4: ['08:00:00','19:00:00'],
-    5: ['08:00:00','19:00:00'],
-    6: null
-  },
-  holidays: [],
-  holidayFormat: 'YYYY-MM-DD'
-});
+// Armazena o último QR gerado
+let latestQr = null;
 
-let wpp, lastQr;
-create({
+// Instância do cliente WhatsApp
+let waClient = null;
+
+// Configura OpenAI
+const openai = new OpenAIApi(new Configuration({
+  apiKey: OPENAI_KEY
+}));
+
+// 1) Inicia o cliente WPPConnect
+wppconnect.create({
   session: 'gerente-comercial',
-  puppeteerOptions: { headless: true, args: ['--no-sandbox','--disable-setuid-sandbox'] }
-})
-.then(c => {
-  wpp = c;
-  c.onQr(qr => lastQr = qr);
-  c.onStateChange(s => (s==='CONFLICT'||s==='UNPAIRED') && c.forceRefocus());
-})
-.catch(e => console.error('WPP init error', e));
-
-app.get('/qr', async (req, res) => {
-  if (!lastQr) return res.send('QR ainda não pronto, aguarde...');
-  const img = await QRCode.toDataURL(lastQr);
-  res.send(`
-    <html><body style="text-align:center">
-      <h3>Gerente Comercial IA</h3>
-      <img src="${img}"/><p>Atualiza em 60s</p>
-      <script>setTimeout(()=>location.reload(),60000)</script>
-    </body></html>`);
-});
-
-const budgets = {}; 
-// budgets[convId] = { client, vendor, created: moment, sent:[6,12,18], answered:bool }
-
-app.post('/conversa', async (req, res) => {
-  res.send('OK');
-  const p = req.body;
-  if (p.type !== 'message-received') return;
-  const txt = p.payload.message?.text || '';
-  const user = p.payload.user;
-  const vendorName = p.payload.atendente?.Nome;
-  const vendor = VENDORS[vendorName];
-  const clientName = user.Name;
-  const convId = `${user.ChatbotId}:${user.Session.Id}`;
-
-  if (/orcament/i.test(txt) && !budgets[convId]) {
-    budgets[convId] = { client: clientName, vendor, created: moment(), sent: [], answered: false };
+  headless: true,            // ou false, se quiser ver o browser
+  puppeteerOptions: {
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu'
+    ]
   }
+})
+.then(client => {
+  waClient = client;
 
-  if (await detectClose(txt)) {
-    const b = budgets[convId];
-    if (b) b.answered = true;
-    const { missing, suggestion } = await runChecklist(p.payload);
-    await wpp.sendText(vendor, missing.length ? suggestion : '✅ Tudo confirmado. Gerando pedido...');
-  }
-});
-
-setInterval(() => {
-  const now = moment();
-  Object.values(budgets).forEach(b => {
-    if (b.answered) return;
-    const h = now.businessDiff(b.created, 'hours');
-    [6,12,18].forEach(th => {
-      if (h >= th && !b.sent.includes(th)) {
-        alertBudget(b, th);
-        b.sent.push(th);
-      }
-    });
+  // QR Code
+  waClient.on('qr', qr => {
+    console.log('QR recebido:', qr);
+    latestQr = qr;
   });
-}, 60_000);
 
-async function alertBudget(b, th) {
-  const { client, vendor } = b;
-  if (th === 6)
-    await wpp.sendText(vendor, `⚠️ Cliente ${client} aguardando orçamento há 6h úteis.`);
-  if (th === 12)
-    await wpp.sendText(vendor, `⚠️ Cliente ${client} aguardando orçamento há 12h úteis.`);
-  if (th === 18) {
-    await wpp.sendText(vendor, `🚨 Cliente ${client} há 18h úteis sem orçamento. Você tem 10min para responder.`);
-    setTimeout(async () => {
-      if (!b.answered) {
-        await wpp.sendText(MGMT_GROUP, `🚨 ${client} ficou 18h sem orçamento e sem resposta.`);
-      }
-    }, 10*60_000);
+  waClient.on('ready', () => {
+    console.log('✅ WhatsApp pronto!');
+  });
+
+  // Mensagens diretas (não notificações de sistema)
+  waClient.on('message', async msg => {
+    try {
+      await processIncoming(msg);
+    } catch (e) {
+      console.error('Erro no processIncoming:', e);
+    }
+  });
+
+})
+.catch(err => console.error('❌ Erro iniciando WPPConnect:', err));
+
+// 2) Rota para exibir QR dinâmico
+app.get('/qr', async (req, res) => {
+  if (!latestQr) {
+    return res.send('QR ainda não pronto, aguarde...');
+  }
+  try {
+    const dataUrl = await qrcode.toDataURL(latestQr);
+    res.send(`
+      <html>
+        <body style="display:flex;justify-content:center;align-items:center;height:100vh;">
+          <img src="${dataUrl}" />
+        </body>
+      </html>
+    `);
+  } catch (err) {
+    console.error('Erro gerando imagem do QR:', err);
+    res.status(500).send('Erro interno');
+  }
+});
+
+// 3) Webhook da Suri para receber logs em tempo real
+app.post('/conversa', async (req, res) => {
+  const payload = req.body;
+  console.log('📌 Payload recebido:', JSON.stringify(payload, null, 2));
+  try {
+    await handleSuriPayload(payload);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('❌ handleSuriPayload:', err);
+    res.sendStatus(500);
+  }
+});
+
+// 4) Processa cada mensagem recebida via webhook
+async function handleSuriPayload(log) {
+  // Exemplo de trigger: só inicia check se detectar intenção de fechamento
+  const text = log.payload?.Mensagem?.text?.toLowerCase() || '';
+  const intentClose = text.includes('fechar') || text.includes('quero fechar') || text.includes('fechamento');
+
+  if (!intentClose) {
+    // Sem sinal de fechamento, não dispara IA nem alertas
+    return;
+  }
+
+  // Monta prompt para OpenAI baseado no checklist aprovado
+  const systemPrompt = `
+Você é o Gerente Comercial IA. Dado o histórico da conversa abaixo, identifique se faltam:
+- Produto
+- Cor
+- Medidas
+- Quantidade
+- Tensão (110/220v)
+- Prazo de produção ou disponibilidade + prazo de envio
+
+Se faltar algo, gere uma SUGESTÃO de mensagem para o vendedor confirmar. 
+Caso esteja tudo OK, não gere alerta.
+Formato de resposta JSON:
+{
+  "alert": true|false,
+  "missing": [ ...itens faltantes... ],
+  "suggestion": "Texto da sugestão ao vendedor"
+}
+`;
+
+  const userPrompt = `Histórico (última mensagem): "${log.payload.Mensagem.text}"`;
+
+  // Chama OpenAI
+  const chat = await openai.createChatCompletion({
+    model: 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: userPrompt }
+    ],
+    temperature: 0.2
+  });
+
+  const result = JSON.parse(chat.data.choices[0].message.content);
+
+  if (result.alert) {
+    // Envia sugestão ao vendedor
+    const vendedorPhone = log.payload.user.Telefone;                  // ex: "5562985299728"
+    await waClient.sendText(vendedorPhone, `❗ Atenção: ${result.suggestion}`);
+
+    // Se for alerta final (faltou em 18h ou caso crítico), notifica o grupo
+    if (shouldNotifyGroup(log)) {
+      await waClient.sendText(GROUP_ID, `🚨 Alerta crítico para ${log.payload.user.Nome}: ${result.suggestion}`);
+    }
   }
 }
 
-async function detectClose(text) {
-  try {
-    const resp = await axios.post(
-      'https://api.openai.com/v1/completions',
-      { model:'text-davinci-003', prompt:`Fecha? "${text}"`, max_tokens:3 },
-      { headers:{ Authorization:`Bearer ${OPENAI_KEY}` } }
-    );
-    return resp.data.choices[0].text.trim().toLowerCase()==='yes';
-  } catch { return false; }
+// 5) Lógica para decidir se dispara alerta no grupo
+function shouldNotifyGroup(log) {
+  // Aqui você implementa a verificação de tempo (6h,12h,18h) e o estado atual
+  // Exemplo simplificado (deixe como stub ou implemente seu scheduler):
+  return false;
 }
 
-async function runChecklist(payload) {
-  const convo = JSON.stringify(payload.message || payload);
-  const sys = `Verifique se tem produto, cor, medidas, qtd, tensão e prazo. Retorne JSON {missing:[], suggestion:"msg"}.`;
-  try {
-    const resp = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      { model:'gpt-4o-mini', messages:[{role:'system',content:sys},{role:'user',content:convo}] },
-      { headers:{ Authorization:`Bearer ${OPENAI_KEY}` } }
-    );
-    return JSON.parse(resp.data.choices[0].message.content);
-  } catch { return { missing:[], suggestion:'Erro no checklist.' }; }
+// 6) Processamento de mensagens diretas (via WPPConnect)
+async function processIncoming(msg) {
+  // Aqui você pode encaminhar ao mesmo handleSuriPayload ou implementar lógica similar
+  // Por simplicidade, vamos transformar em payload e chamar handleSuriPayload:
+  const fauxLog = {
+    payload: {
+      user: {
+        Telefone: msg.from.replace('@c.us',''),
+        Nome: msg.sender.pushname || msg.from
+      },
+      Mensagem: { text: msg.body }
+    }
+  };
+  await handleSuriPayload(fauxLog);
 }
 
-app.listen(PORT, () => console.log(`🚀 Porta ${PORT}`));
+// 7) Inicia servidor
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+});
