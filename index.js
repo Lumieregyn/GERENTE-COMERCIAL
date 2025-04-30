@@ -1,4 +1,3 @@
-// index.js
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
@@ -16,16 +15,15 @@ const openai = new OpenAIApi(
 
 let qrBase64 = '';
 
-// 1) Cria cliente WPPConnect sem auto-close e com flags de container
 async function startWhatsApp() {
   try {
     const client = await create({
       session: 'gerente-comercial',
-      authTimeout: 0,        // espera indefinidamente o scan do QR
-      autoClose: false,      // não fecha o browser se não logar
-      logQR: false,          // vamos guardar o QR via callback
+      authTimeout: 0,
+      autoClose: false,
+      logQR: false,
       disableSpins: true,
-      useChrome: false,      // usar Chromium embutido
+      useChrome: false,
       puppeteerOptions: {
         headless: true,
         args: [
@@ -45,16 +43,16 @@ async function startWhatsApp() {
     console.log('✅ Cliente WPP iniciado');
 
     client.onMessage(async message => {
-      // reenvia para SURI
       try {
         await axios.post(WEBHOOK_URL, message);
       } catch (e) {
         console.error('❌ Erro no webhook:', e.message);
       }
 
-      // aqui você chama sua lógica de IA / checklist
-      // const análise = await analyzeMessage(message);
-      // se necessário, dispare alertas com client.sendText(...)
+      // Aqui entra sua lógica de IA / checklist pós-fechamento
+      // Exemplo:
+      // const result = await openai.createChatCompletion({ ... })
+      // if (result.something) client.sendText(...)
     });
 
   } catch (err) {
@@ -63,10 +61,8 @@ async function startWhatsApp() {
   }
 }
 
-// 2) Endpoints HTTP
 app.use(express.json());
 
-// QR dinâmico
 app.get('/qr', async (req, res) => {
   if (!qrBase64) {
     return res.send('QR ainda não pronto, aguarde...');
@@ -79,14 +75,11 @@ app.get('/qr', async (req, res) => {
   }
 });
 
-// Recebe logs da SURI
 app.post('/conversa', (req, res) => {
   console.log('> Payload SURI:', req.body);
-  // rodar lógica de análise pós-fechamento aqui...
   res.sendStatus(200);
 });
 
-// 3) Start server + WhatsApp
 app.listen(PORT, () => {
   console.log(`🌐 Server rodando na porta ${PORT}`);
   startWhatsApp();
