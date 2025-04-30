@@ -1,6 +1,6 @@
 FROM node:18
 
-# instala dependências que o Chromium precisa
+# instala libs que o Chromium precisa
 RUN apt-get update && apt-get install -y \
     wget ca-certificates fonts-liberation libappindicator3-1 \
     libasound2 libatk-bridge2.0-0 libatk1.0-0 libcups2 \
@@ -10,8 +10,11 @@ RUN apt-get update && apt-get install -y \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY package*.json ./
+
+COPY package.json package-lock.json* ./
 RUN npm install
+
 COPY . .
+
 EXPOSE 8080
 CMD ["npm", "start"]
