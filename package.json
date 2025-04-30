@@ -1,18 +1,16 @@
 {
   "name": "gerente-comercial",
   "version": "1.0.0",
-  "description": "IA para monitoramento e alertas comerciais via WhatsApp",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
- "dependencies": {
-  "express": "^4.x",
-  "body-parser": "^1.x",
-  "qrcode": "^1.x",
-  "@wppconnect-team/wppconnect": "^x.x",
-  "axios": "^0.x",
-  "moment-business-time": "^x.x",
-  "dotenv": "^16.x"
-}
+  "dependencies": {
+    "@wppconnect-team/wppconnect": "^2.x",
+    "dotenv": "^16.x",
+    "express": "^4.x",
+    "body-parser": "^1.x",
+    "qrcode": "^1.x",
+    "openai": "^4.x"
+  }
 }
