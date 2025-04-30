@@ -8,3 +8,8 @@ async function analyzeMensagem(payload) {
 }
 
 module.exports = { analyzeMensagem };
+module.exports.analisarMensagem = async function analisarMensagem(payload) {
+  // Exemplo mínimo: loga e retorna
+  console.log('📌 Analisando payload:', payload);
+  // TODO: chamar seu GPT-4, verificar regras aprovadas, enviar alertas via WPPConnect etc.
+};
