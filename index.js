@@ -1,86 +1,91 @@
 // index.js
+
 require('dotenv').config();
-const express = require('express'),
-      bodyParser = require('body-parser'),
-      qrcode = require('qrcode'),
-      wpp = require('@wppconnect-team/wppconnect'),
-      { Configuration, OpenAIApi } = require('openai');
 
-const app = express(),
-      PORT = process.env.PORT || 8080,
-      GROUP_ID = process.env.WHATSAPP_GROUP_ID;
+const express = require('express');
+const bodyParser = require('body-parser');
+const QRCode = require('qrcode');
+const wppconnect = require('@wppconnect-team/wppconnect');
+const { OpenAI } = require('openai'); // v4: usa a classe OpenAI diretamente
 
-let latestQr = null, client = null;
-const ai = new OpenAIApi(new Configuration({ apiKey: process.env.OPENAI_API_KEY }));
+// Inicializa a API da OpenAI
+const ai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
+const app = express();
 app.use(bodyParser.json());
 
-// 1) Inicia WPPConnect
-wpp.create({
-  session: 'gc',
-  headless: true,
-  puppeteerOptions: {
-    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage']
-  }
-})
-.then(c => {
-  client = c;
-  c.on('qr', qr => latestQr = qr);
-  c.on('ready', () => console.log('✅ WhatsApp pronto'));
-  c.on('message', m => handleIncoming({ from: m.from, body: m.body }));
-})
-.catch(console.error);
-
-// 2) Rota QR dinâmico
-app.get('/qr', (req, res) => {
-  if (!latestQr) return res.send('QR ainda não pronto, aguarde...');
-  qrcode.toDataURL(latestQr)
-    .then(img => res.send(`<img src="${img}" style="display:block;margin:auto;"/>`))
-    .catch(() => res.status(500).send('Erro interno'));
-});
-
-// 3) Webhook Suri
-app.post('/conversa', async (req, res) => {
-  try {
-    await processLog(req.body);
-    res.sendStatus(200);
-  } catch (e) {
-    console.error(e);
-    res.sendStatus(500);
-  }
-});
-
-async function processLog(log) {
-  const text = (log.payload?.Mensagem?.text || '').toLowerCase();
-  if (!/(fechar|quero fechar|fechamento)/.test(text)) return;
-  const system = `
-Você é o Gerente Comercial IA. Confira se faltam: Produto, Cor, Medidas, Quantidade, Tensão, Prazos.
-Se faltar, responda JSON:
-{ "alert": true, "missing": [...], "suggestion": "texto" }
-Se estiver ok: { "alert": false }
-`;
-  const chat = await ai.createChatCompletion({
-    model: 'gpt-4o-mini',
-    messages: [{ role: 'system', content: system }, { role: 'user', content: text }],
-    temperature: 0.2
-  });
-  const { alert, suggestion } = JSON.parse(chat.data.choices[0].message.content);
-  if (alert) {
-    const phone = log.payload.user.Telefone;
-    await client.sendText(phone, `❗ ${suggestion}`);
-    // aqui você insere a lógica de 6h/12h/18h
-    // se for crítico:
-    // await client.sendText(GROUP_ID, `🚨 ${suggestion}`);
-  }
-}
-
-function handleIncoming(msg) {
-  processLog({
-    payload: {
-      user: { Telefone: msg.from.replace('@c.us','') },
-      Mensagem: { text: msg.body }
+// Monta cliente WhatsApp
+wppconnect
+  .create({
+    session: 'gerente-comercial',
+    headless: true,
+    puppeteerOptions: {
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
     }
-  });
-}
+  })
+  .then(client => {
+    // Gera QR dinâmico
+    client.onQr(qr => {
+      QRCode.toDataURL(qr).then(url => {
+        app.get('/qr', (req, res) => {
+          res.send(`
+            <h3>Escaneie o QR com o WhatsApp:</h3>
+            <img src="${url}" />
+          `);
+        });
+      });
+    });
 
-app.listen(PORT, () => console.log(`🚀 Porta ${PORT}`));
+    // Quando conectado
+    client.onStateChanged(state => {
+      if (state === 'CONNECTED') {
+        console.log('✅ WhatsApp conectado.');
+        // QR já não precisa mais ficar disponível
+        app.get('/qr', (req, res) => res.send('<h3>WhatsApp já conectado!</h3>'));
+      }
+    });
+
+    // Endpoint para receber payload do webhook Suri
+    app.post('/conversa', async (req, res) => {
+      const payload = req.body;
+      console.log('📥 Payload recebido:', JSON.stringify(payload, null, 2));
+
+      // Extrai texto, anexos, vendedor, cliente etc...
+      const texto = payload.payload.Mensagem.text || '';
+      const anexos = payload.payload.Mensagem.anexos || [];
+      const vendedorTel = payload.atendente.Telefone || payload.atendente.Id;
+      const cliente = payload.payload.user.Nome;
+
+      // Chama a OpenAI para analisar checklist
+      const prompt = `
+Você é o Gerente Comercial IA. Avalie esta conversa:
+Cliente: "${texto}"
+Anexos: ${anexos.map(a => a.tipo).join(', ')}
+Responda quais pontos de checklist faltam: produto, cor, medidas, tensão, prazo e confirmação de fechamento.
+`;
+      const chat = await ai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }]
+      });
+      const analise = chat.choices[0].message.content;
+      console.log('🤖 Análise IA:', analise);
+
+      // Lógica de alertas baseada na análise e no tempo de espera já registrada por seu sistema
+      // (implemente aqui sua lógica de horas: 6h/12h/18h e envio p/ vendedores ou grupo)
+
+      // Exemplo simples de envio de mensagem de alerta ao vendedor
+      await client.sendText(vendedorTel, `⚠️ Alerta de checklist:\n${analise}`);
+
+      res.sendStatus(200);
+    });
+
+    // Sobe o servidor HTTP
+    const PORT = process.env.PORT || 8080;
+    app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
+  })
+  .catch(err => {
+    console.error('❌ Erro ao iniciar o cliente WPP:', err);
+    process.exit(1);
+  });
