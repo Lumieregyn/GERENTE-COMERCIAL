@@ -1,17 +1,1 @@
-
-{
-  "name": "gerente-comercial",
-  "version": "1.0.0",
-  "description": "IA Comercial Lumieregyn",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "@wppconnect-team/wppconnect": "^1.9.7",
-    "axios": "^1.4.0",
-    "dotenv": "^16.0.3",
-    "express": "^4.18.2",
-    "moment": "^2.29.4"
-  }
-}
+// Conteúdo simulado de package.json
