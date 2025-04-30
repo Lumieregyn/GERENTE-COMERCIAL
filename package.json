@@ -1,15 +1,17 @@
 {
-  "name": "gerente-comercial-ia",
+  "name": "gerente-comercial",
   "version": "1.0.0",
-  "description": "Gerente Comercial IA para WhatsApp com WPPConnect e análise de IA",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@wppconnect-team/wppconnect": "^2.0.0",
     "dotenv": "^16.0.0",
     "express": "^4.18.2",
-    "qrcode": "^1.5.1"
+    "@wppconnect-team/wppconnect": "1.9.3",      // versão existente no npm
+    "qrcode": "^1.5.1",                          // para gerar o QR em base64
+    "axios": "^1.4.0",                           // para enviar logs à SURI
+    "node-schedule": "^2.1.0",                   // para agendar alertas
+    // e qualquer outro utilitário que seus utils precisarem
   }
 }
