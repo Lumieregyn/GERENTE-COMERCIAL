@@ -1,22 +1,23 @@
-# Gerente Comercial
+# Gerente Comercial IA
 
-Projeto para monitoramento e alertas via WhatsApp utilizando WPPConnect e IA.
+Projeto para monitoramento de conversas via WhatsApp, com IA para geração de alertas e checklists.
 
-## Estrutura
+## Instalação
 
-- `index.js` - ponto de entrada do servidor express + WPPConnect.
-- `utils/analyzeGPT.js` - lógica de análise de mensagens via OpenAI.
-- `utils/timeUtils.js` - utilitário para verificar horário comercial.
-- `public/index.html` - visualização do QR Code.
+1. Clone este repositório.
+2. Rode `npm install`.
+3. Configure o webhook em sua plataforma (ex: Suri) apontando para `/conversa`.
+4. Faça deploy (e.g., Railway) e aguarde geração do QR code em `/`.
 
-## Docker
+## Uso
 
-```bash
-docker build -t gerente-comercial .
-docker run -p 8080:8080 --env-file .env gerente-comercial
-```
+- Acesse a rota `/` para escanear o QR code e conectar o WhatsApp.
+- Webhook `/conversa` recebe os logs e processa a lógica de alertas.
+- Ajuste a lógica no `index.js` conforme suas regras aprovadas.
 
-## Variáveis de ambiente
+## Dependências
 
-- `OPENAI_API_KEY` - chave da API OpenAI.
-- `WPP_SESSION_NAME` - nome da sessão WPPConnect (opcional).
+- Node.js 18
+- @wppconnect-team/wppconnect v1.9.3 (versão do WhatsApp Web forçada para 2.2407.3)
+- Express
+- QRCode

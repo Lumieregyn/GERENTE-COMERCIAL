@@ -1,95 +1,64 @@
-// index.js
-require('dotenv').config();
 const express = require('express');
-const wppconnect = require('@wppconnect-team/wppconnect');
+const bodyParser = require('body-parser');
 const qrcode = require('qrcode');
+const wppconnect = require('@wppconnect-team/wppconnect');
 
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
 
-const PORT = process.env.PORT || 10000;
-let client = null;
+let client;
+let qrCodeDataUrl = '';
 
-// Captura qualquer rejeição não tratada
-process.on('unhandledRejection', (reason) => {
-  console.error('🚨 Unhandled Rejection:', reason);
-});
-
-async function initWhatsApp() {
-  const baseOpts = {
+// Initialize WhatsApp client
+async function startWhatsApp() {
+  client = await wppconnect.create({
     session: 'GerenteComercialIA',
     headless: true,
     logQR: false,
+    version: '2.2407.3',
+    useChrome: false,
+    browserArgs: ['--no-sandbox', '--disable-setuid-sandbox'],
     puppeteerOptions: {
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
     },
-    browserArgs: ['--no-sandbox', '--disable-setuid-sandbox'],
-    useChrome: false,
-    catchQR: (base64Qrimg /*, asciiQR, attempts */) => {
-      console.log('⏳ QRCode (base64):', base64Qrimg.slice(0, 50) + '...');
+    catchQR: (base64Qr) => {
+      qrcode.toDataURL(base64Qr, (err, url) => {
+        if (err) console.error(err);
+        else qrCodeDataUrl = url;
+      });
     },
     statusFind: (statusSession, session) => {
-      console.log(`🔄 Status [${session}]:`, statusSession);
+      console.log(`Session ${session} status: ${statusSession}`);
     },
-  };
-
-  try {
-    // Primeiro, tenta sem forçar versão
-    client = await wppconnect.create(baseOpts);
-    console.log('✅ WPPConnect iniciado (auto-version)');
-  } catch (err) {
-    if (
-      err.message &&
-      err.message.includes('Version not available')
-    ) {
-      console.warn(
-        '⚠️ Versão detectada não disponível, fazendo retry com fallback...'
-      );
-      // Retry com versão estável
-      client = await wppconnect.create({
-        ...baseOpts,
-        version: '2.2407.3', // fallback comprovado
-      });
-      console.log('✅ WPPConnect iniciado (fallback 2.2407.3)');
-    } else {
-      console.error('❌ Erro ao iniciar WPPConnect:', err);
-      throw err;
-    }
-  }
+  });
 }
 
-// Rota para exibir QR code em HTML
-app.get('/qr', async (req, res) => {
-  if (!client) {
-    return res.status(503).send('🔴 WhatsApp não iniciado ainda.');
+// Serve dynamic QR code
+app.get('/', (req, res) => {
+  if (!qrCodeDataUrl) {
+    return res.send('Aguardando QR Code...');
   }
-  try {
-    const qr = await client.getQrCode();
-    const img = await qrcode.toDataURL(qr);
-    res.send(`
-      <html><body style="display:flex;align-items:center;justify-content:center;height:100vh">
-        <img src="${img}" alt="QR Code" />
-      </body></html>
-    `);
-  } catch (err) {
-    console.error('❌ Falha ao gerar QR:', err);
-    res.status(500).send('Erro ao gerar QR code');
-  }
+  res.send(\`
+    <html>
+      <body>
+        <img src="\${qrCodeDataUrl}" alt="QR Code"/>
+        <script>
+          setTimeout(() => location.reload(), 60000);
+        </script>
+      </body>
+    </html>
+  \`);
 });
 
-// Webhook de logs da Suri
-app.post('/conversa', async (req, res) => {
-  console.log('📥 Payload /conversa:', JSON.stringify(req.body, null, 2));
-
-  // TODO: aqui injete sua lógica de IA para checklists, alertas, etc.
-  // Exemplo de alertar vendedor:
-  // await client.sendText(vendedorPhone, '🚨 [Alerta] ...');
-
+// Webhook endpoint for incoming messages
+app.post('/conversa', (req, res) => {
+  console.log('Payload recebido:', JSON.stringify(req.body, null, 2));
+  // TODO: implementar lógica de checklist, alertas, análise de imagem/audio
   res.sendStatus(200);
 });
 
-// Inicia tudo
-app.listen(PORT, async () => {
-  console.log(`🚀 Servidor ouvindo na porta ${PORT}`);
-  await initWhatsApp();
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log(\`Servidor rodando na porta \${PORT}\`);
+  startWhatsApp();
 });
