@@ -1,72 +1,85 @@
 require('dotenv').config();
 const express = require('express');
-const { create } = require('@wppconnect-team/wppconnect');
+const { create, Whatsapp } = require('@wppconnect-team/wppconnect');
 const QRCode = require('qrcode');
-const path = require('path');
-const { analisarMensagem } = require('./utils/analyzeGPT');
-const { estáNoHorárioComercial } = require('./utils/timeUtils');
+const axios = require('axios');
+const schedule = require('node-schedule');
+// importe aqui seus utils: analyzeGPT, timeUtils, etc.
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+app.use(express.json());
 
-let base64Qr = '';
+let client;               // instância WPPConnect
+let qrImage;              // QR em Base64
+const WEBHOOK_URL = process.env.SURI_WEBHOOK_URL;
+const GRUPO_GESTORES = process.env.GRUPO_GESTORES_ID;
+const VENDEDORES = {
+  "Cindy": "5562994671766",
+  "Ana Clara": "556291899053",
+  "Emily": "556281704171"
+  // ...
+};
 
-// 1) Inicia o cliente WPPConnect e captura o QR
+// 1) Inicializa WPPConnect
 create({
   session: 'lumieregyn',
   puppeteerOptions: {
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--disable-gpu'
-    ]
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
   }
 })
-  .then(client => {
-    console.log('✅ WhatsApp client inicializado');
+  .then(async (clientInstance) => {
+    client = clientInstance;
 
-    client.on('qr', async qr => {
-      base64Qr = await QRCode.toDataURL(qr);
-      console.log('🔍 QR gerado');
+    client.onStateChange((state) => {
+      console.log('Estado WPP:', state);
+      // se perder conexão, trate reconexão
     });
 
-    client.on('message', msg => {
-      // toda a lógica de IA, checklist e alertas
-      analisarMensagem(msg).catch(console.error);
+    // captura QR e converte em Base64
+    client.onQRCode(async (base64Qr) => {
+      qrImage = base64Qr;
+    });
+
+    // quando pronto
+    client.onReady(() => {
+      console.log('✅ WhatsApp conectado');
+    });
+
+    // roteador de mensagens
+    client.onMessage(async (msg) => {
+      // envie o payload para SURI
+      await axios.post(WEBHOOK_URL, msg);
+      // aplique sua lógica de IA, checklist, alertas, etc.
     });
   })
-  .catch(err => console.error('Erro ao iniciar o cliente WPP:', err));
+  .catch(err => console.error('Erro ao iniciar WPP:', err));
 
-// 2) Serve o frontend (se existir)
-app.use('/public', express.static(path.join(__dirname, 'public')));
-
-// 3) Rota para pegar o QR Code
-app.get('/qr', (req, res) => {
-  if (!base64Qr) {
-    return res.status(503).send('QR ainda não pronto, aguarde...');
+// 2) Rota para servir o QR dinâmico
+app.get('/qr', async (req, res) => {
+  if (!qrImage) {
+    return res.status(503).send('QR ainda não disponível');
   }
-  const img = Buffer.from(base64Qr.split(',')[1], 'base64');
-  res.writeHead(200, {
-    'Content-Type': 'image/png',
-    'Content-Length': img.length
-  });
-  res.end(img);
+  const img = Buffer.from(qrImage.split(',')[1], 'base64');
+  res.setHeader('Content-Type', 'image/png');
+  res.send(img);
 });
 
-// 4) Webhook para receber logs da SURI
-app.post('/conversa', express.json(), async (req, res) => {
-  try {
-    await analisarMensagem(req.body);
-    res.sendStatus(200);
-  } catch (e) {
-    console.error(e);
-    res.sendStatus(500);
+// 3) Rota webhook (SURI → aqui chega payload de conversa)
+app.post('/conversa', async (req, res) => {
+  const payload = req.body;
+  console.log('Payload recebido:', payload);
+  // aqui dispare sua análise e alertas
+  res.sendStatus(200);
+});
+
+// 4) Exemplo de agendamento de alerta
+// dispara às 14:00 todo dia útil:
+schedule.scheduleJob(
+  { hour: 14, minute: 0, dayOfWeek: new schedule.Range(1,5) },
+  () => {
+    // verifique orçamentos pendentes e envie alerta
   }
-});
+);
 
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando na porta ${PORT}`);
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
