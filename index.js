@@ -1,91 +1,93 @@
 // index.js
-
 require('dotenv').config();
-
 const express = require('express');
-const bodyParser = require('body-parser');
+const axios = require('axios');
 const QRCode = require('qrcode');
-const wppconnect = require('@wppconnect-team/wppconnect');
-const { OpenAI } = require('openai'); // v4: usa a classe OpenAI diretamente
-
-// Inicializa a API da OpenAI
-const ai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+const { create } = require('@wppconnect-team/wppconnect');
+const { Configuration, OpenAIApi } = require('openai');
 
 const app = express();
-app.use(bodyParser.json());
+const PORT = process.env.PORT || 8080;
+const WEBHOOK_URL = process.env.SURI_WEBHOOK_URL;
 
-// Monta cliente WhatsApp
-wppconnect
-  .create({
-    session: 'gerente-comercial',
-    headless: true,
-    puppeteerOptions: {
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    }
-  })
-  .then(client => {
-    // Gera QR dinâmico
-    client.onQr(qr => {
-      QRCode.toDataURL(qr).then(url => {
-        app.get('/qr', (req, res) => {
-          res.send(`
-            <h3>Escaneie o QR com o WhatsApp:</h3>
-            <img src="${url}" />
-          `);
-        });
-      });
+const openai = new OpenAIApi(
+  new Configuration({ apiKey: process.env.OPENAI_API_KEY })
+);
+
+let qrBase64 = '';
+
+// 1) Cria cliente WPPConnect sem auto-close e com flags de container
+async function startWhatsApp() {
+  try {
+    const client = await create({
+      session: 'gerente-comercial',
+      authTimeout: 0,        // espera indefinidamente o scan do QR
+      autoClose: false,      // não fecha o browser se não logar
+      logQR: false,          // vamos guardar o QR via callback
+      disableSpins: true,
+      useChrome: false,      // usar Chromium embutido
+      puppeteerOptions: {
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--single-process',
+        ],
+      },
+      qrCallback: base64Qr => {
+        qrBase64 = base64Qr;
+        console.log('📸 QR recebido');
+      },
     });
 
-    // Quando conectado
-    client.onStateChanged(state => {
-      if (state === 'CONNECTED') {
-        console.log('✅ WhatsApp conectado.');
-        // QR já não precisa mais ficar disponível
-        app.get('/qr', (req, res) => res.send('<h3>WhatsApp já conectado!</h3>'));
+    console.log('✅ Cliente WPP iniciado');
+
+    client.onMessage(async message => {
+      // reenvia para SURI
+      try {
+        await axios.post(WEBHOOK_URL, message);
+      } catch (e) {
+        console.error('❌ Erro no webhook:', e.message);
       }
+
+      // aqui você chama sua lógica de IA / checklist
+      // const análise = await analyzeMessage(message);
+      // se necessário, dispare alertas com client.sendText(...)
     });
 
-    // Endpoint para receber payload do webhook Suri
-    app.post('/conversa', async (req, res) => {
-      const payload = req.body;
-      console.log('📥 Payload recebido:', JSON.stringify(payload, null, 2));
-
-      // Extrai texto, anexos, vendedor, cliente etc...
-      const texto = payload.payload.Mensagem.text || '';
-      const anexos = payload.payload.Mensagem.anexos || [];
-      const vendedorTel = payload.atendente.Telefone || payload.atendente.Id;
-      const cliente = payload.payload.user.Nome;
-
-      // Chama a OpenAI para analisar checklist
-      const prompt = `
-Você é o Gerente Comercial IA. Avalie esta conversa:
-Cliente: "${texto}"
-Anexos: ${anexos.map(a => a.tipo).join(', ')}
-Responda quais pontos de checklist faltam: produto, cor, medidas, tensão, prazo e confirmação de fechamento.
-`;
-      const chat = await ai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }]
-      });
-      const analise = chat.choices[0].message.content;
-      console.log('🤖 Análise IA:', analise);
-
-      // Lógica de alertas baseada na análise e no tempo de espera já registrada por seu sistema
-      // (implemente aqui sua lógica de horas: 6h/12h/18h e envio p/ vendedores ou grupo)
-
-      // Exemplo simples de envio de mensagem de alerta ao vendedor
-      await client.sendText(vendedorTel, `⚠️ Alerta de checklist:\n${analise}`);
-
-      res.sendStatus(200);
-    });
-
-    // Sobe o servidor HTTP
-    const PORT = process.env.PORT || 8080;
-    app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
-  })
-  .catch(err => {
-    console.error('❌ Erro ao iniciar o cliente WPP:', err);
+  } catch (err) {
+    console.error('❌ Erro ao iniciar o cliente WPP:', err.message);
     process.exit(1);
-  });
+  }
+}
+
+// 2) Endpoints HTTP
+app.use(express.json());
+
+// QR dinâmico
+app.get('/qr', async (req, res) => {
+  if (!qrBase64) {
+    return res.send('QR ainda não pronto, aguarde...');
+  }
+  try {
+    const dataUrl = await QRCode.toDataURL(qrBase64);
+    res.send(`<img src="${dataUrl}" />`);
+  } catch {
+    res.status(500).send('Erro ao gerar QR');
+  }
+});
+
+// Recebe logs da SURI
+app.post('/conversa', (req, res) => {
+  console.log('> Payload SURI:', req.body);
+  // rodar lógica de análise pós-fechamento aqui...
+  res.sendStatus(200);
+});
+
+// 3) Start server + WhatsApp
+app.listen(PORT, () => {
+  console.log(`🌐 Server rodando na porta ${PORT}`);
+  startWhatsApp();
+});
