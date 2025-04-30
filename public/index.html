@@ -1,1 +1,20 @@
-// Conteúdo simulado de public/index.html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Gerente Comercial QR Code</title>
+</head>
+<body>
+  <h1>Gerente Comercial QR Code</h1>
+  <img id="qr" alt="QR Code"/>
+  <script>
+    async function fetchQR(){
+      const res = await fetch('/qr');
+      const html = await res.text();
+      document.getElementById('qr').outerHTML = html;
+    }
+    setInterval(fetchQR, 5000);
+    fetchQR();
+  </script>
+</body>
+</html>
