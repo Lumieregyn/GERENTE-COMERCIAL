@@ -1,20 +1,32 @@
-
 require('dotenv').config();
 const express = require('express');
+const { create } = require('@wppconnect-team/wppconnect');
+const { analyzeMessage } = require('./utils/analyzeGPT');
+const { isBusinessHour } = require('./utils/timeUtils');
 const app = express();
+const PORT = process.env.PORT || 8080;
 
 app.use(express.json());
 
-app.get('/qr', (req, res) => {
-    res.send('QR Code route OK');
+create({
+  session: 'lumieregyn',
+  catchQR: (base64Qr, asciiQR, attempt) => {
+    console.log("QR Code gerado:", asciiQR);
+  },
+  puppeteerOptions: { args: ['--no-sandbox'] }
+}).then(client => {
+  console.log("✅ WhatsApp conectado.");
+  client.onMessage(async (message) => {
+    console.log("Mensagem recebida:", message.body);
+  });
 });
 
 app.post('/conversa', (req, res) => {
-    console.log("Payload recebido:", req.body);
-    res.status(200).send('Rota /conversa recebida com sucesso!');
+  const payload = req.body;
+  console.log("📩 Payload recebido:", payload);
+  res.sendStatus(200);
 });
 
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
+  console.log(`Servidor rodando na porta ${PORT}`);
 });
