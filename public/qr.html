@@ -1,0 +1,17 @@
+
+<html>
+  <head><title>QR Code</title></head>
+  <body>
+    <h1>Escaneie o QR Code abaixo:</h1>
+    <div id="qrcode">
+      <img src="" id="qr-img" />
+    </div>
+    <script>
+      setInterval(() => {
+        fetch('/qr').then(res => res.text()).then(html => {
+          document.getElementById('qrcode').innerHTML = html;
+        });
+      }, 60000);
+    </script>
+  </body>
+</html>
